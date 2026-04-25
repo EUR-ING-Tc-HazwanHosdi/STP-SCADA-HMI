@@ -1,93 +1,210 @@
-from fastapi import FastAPI
+import streamlit as st
+import numpy as np
+import pandas as pd
+import os
 from datetime import datetime
+from sklearn.preprocessing import MinMaxScaler
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense
 
-app = FastAPI()
+# =========================================================
+# CONFIG
+# =========================================================
+st.set_page_config("STP DIGITAL TWIN V9", layout="wide")
 
-# -------------------------
-# In-memory "SCADA database"
-# -------------------------
-DB = []
+PLANTS = {
+    "Plant A - Industrial": "plant_a.csv",
+    "Plant B - Residential": "plant_b.csv",
+    "Plant C - Mixed Load": "plant_c.csv"
+}
 
-# -------------------------
-# AI DIAGNOSTIC ENGINE
-# -------------------------
-def diagnose(do, nh3, srt, svi):
+# =========================================================
+# INIT FILES
+# =========================================================
+def init_file(file):
+    if not os.path.exists(file):
+        df = pd.DataFrame(columns=["time","DO","NH3","SRT","SVI"])
+        df.to_csv(file, index=False)
 
-    faults = []
-    actions = []
-    status = "STABLE"
+for p in PLANTS.values():
+    init_file(p)
 
-    # Nitrification issue
-    if nh3 > 10:
-        if srt < 10:
-            faults.append("Nitrification Failure (Low SRT)")
-            actions.append("Increase SRT (reduce sludge wasting)")
-        if do < 2:
-            faults.append("Nitrification Failure (Low DO)")
-            actions.append("Increase aeration")
+# =========================================================
+# SAVE DATA
+# =========================================================
+def save_data(file, do, nh3, srt, svi):
+    df = pd.read_csv(file)
 
-    # Bulking
-    if svi > 150:
-        faults.append("Sludge Bulking")
-        actions.append("Adjust DO and F/M balance")
-
-    # Washout
-    if srt < 5:
-        faults.append("Biomass Washout Risk")
-        actions.append("STOP sludge wasting")
-
-    # Status logic
-    if len(faults) >= 2:
-        status = "CRITICAL"
-    elif len(faults) == 1:
-        status = "WARNING"
-
-    if not faults:
-        actions.append("Maintain current operation")
-
-    return {
-        "status": status,
-        "faults": faults,
-        "actions": actions
-    }
-
-# -------------------------
-# INGEST SCADA DATA
-# -------------------------
-@app.post("/ingest")
-def ingest(data: dict):
-
-    record = {
+    new = {
         "time": str(datetime.now()),
-        "DO": data["DO"],
-        "NH3": data["NH3"],
-        "SRT": data["SRT"],
-        "SVI": data["SVI"]
+        "DO": do,
+        "NH3": nh3,
+        "SRT": srt,
+        "SVI": svi
     }
 
-    DB.append(record)
+    df = pd.concat([df, pd.DataFrame([new])], ignore_index=True)
+    df.to_csv(file, index=False)
 
-    return {"message": "stored"}
+# =========================================================
+# DIGITAL TWIN SIMULATION (process behavior model)
+# =========================================================
+def digital_twin(do, nh3, srt, svi):
 
-# -------------------------
-# GET LATEST + AI RESULT
-# -------------------------
-@app.get("/latest")
-def latest():
+    nh3 = nh3 + np.random.normal(0, 0.5)
+    do = do + np.random.normal(0, 0.2)
 
-    if not DB:
-        return {"error": "no data"}
+    return do, nh3, srt, svi
 
-    last = DB[-1]
+# =========================================================
+# LSTM MODEL (simple forecasting)
+# =========================================================
+def train_lstm(data):
 
-    analysis = diagnose(
-        last["DO"],
-        last["NH3"],
-        last["SRT"],
-        last["SVI"]
-    )
+    scaler = MinMaxScaler()
+    data_scaled = scaler.fit_transform(data)
 
-    return {
-        "data": last,
-        "analysis": analysis
-    }
+    X, y = [], []
+
+    for i in range(len(data_scaled)-5):
+        X.append(data_scaled[i:i+5])
+        y.append(data_scaled[i+5][1])  # NH3
+
+    X, y = np.array(X), np.array(y)
+
+    model = Sequential()
+    model.add(LSTM(32, input_shape=(5,4)))
+    model.add(Dense(1))
+
+    model.compile(optimizer="adam", loss="mse")
+    model.fit(X, y, epochs=5, verbose=0)
+
+    return model, scaler
+
+# =========================================================
+# UI - MULTI PLANT
+# =========================================================
+st.title("🏭 Industrial Digital Twin V9")
+
+plant_name = st.sidebar.selectbox("Select Plant", list(PLANTS.keys()))
+file = PLANTS[plant_name]
+
+# =========================================================
+# INPUTS
+# =========================================================
+st.sidebar.subheader("Operator Inputs")
+
+do = st.sidebar.slider("DO", 0.0, 10.0, 2.0)
+nh3 = st.sidebar.slider("NH3", 0.0, 30.0, 5.0)
+srt = st.sidebar.slider("SRT", 0.0, 20.0, 8.0)
+svi = st.sidebar.slider("SVI", 50.0, 250.0, 120.0)
+
+if st.sidebar.button("Run Digital Twin Step"):
+
+    do, nh3, srt, svi = digital_twin(do, nh3, srt, svi)
+
+    save_data(file, do, nh3, srt, svi)
+
+    st.success("Twin step executed")
+
+# =========================================================
+# LOAD DATA
+# =========================================================
+df = pd.read_csv(file)
+
+# =========================================================
+# HEALTH ENGINE
+# =========================================================
+health = 100
+
+if do < 1:
+    health -= 40
+if nh3 > 10:
+    health -= 20
+if svi > 150:
+    health -= 20
+if srt < 5:
+    health -= 20
+
+# =========================================================
+# KPI DASHBOARD
+# =========================================================
+c1, c2, c3, c4 = st.columns(4)
+
+c1.metric("DO", round(do,2))
+c2.metric("NH3", round(nh3,2))
+c3.metric("SRT", round(srt,2))
+c4.metric("Health", health)
+
+st.progress(max(health,0))
+
+# =========================================================
+# FAULT ENGINE
+# =========================================================
+st.subheader("🚨 Fault Detection")
+
+faults = []
+
+if nh3 > 10 and srt < 10:
+    faults.append("Nitrification Limitation")
+
+if do > 5 and nh3 > 10:
+    faults.append("Process Imbalance (High DO but high NH3)")
+
+if svi > 150:
+    faults.append("Bulking Risk")
+
+for f in faults:
+    st.error(f)
+
+if not faults:
+    st.success("Stable Operation")
+
+# =========================================================
+# LSTM PREDICTION
+# =========================================================
+st.subheader("🧠 LSTM NH3 Forecast")
+
+if len(df) > 20:
+
+    data = df[["DO","NH3","SRT","SVI"]].values
+
+    model, scaler = train_lstm(data)
+
+    last_seq = scaler.transform(data[-5:]).reshape(1,5,4)
+
+    pred = model.predict(last_seq)[0][0]
+
+    st.write("Predicted NH3:", float(pred))
+
+    if pred > 15:
+        st.error("⚠️ Future NH3 spike predicted")
+
+else:
+    st.info("Need more data for LSTM training")
+
+# =========================================================
+# DIGITAL TWIN TREND
+# =========================================================
+st.subheader("📈 Plant Trend")
+
+if len(df) > 0:
+    st.line_chart(df.set_index("time")[["DO","NH3"]])
+
+# =========================================================
+# MULTI PLANT OVERVIEW
+# =========================================================
+st.subheader("🌍 Fleet Overview")
+
+summary = []
+
+for name, f in PLANTS.items():
+    d = pd.read_csv(f)
+    if len(d) > 0:
+        summary.append({
+            "Plant": name,
+            "Last NH3": d["NH3"].iloc[-1],
+            "Last DO": d["DO"].iloc[-1]
+        })
+
+st.dataframe(pd.DataFrame(summary))
