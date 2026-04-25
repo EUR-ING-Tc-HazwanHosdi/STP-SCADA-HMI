@@ -3,14 +3,12 @@ import numpy as np
 import pandas as pd
 import os
 from datetime import datetime
-from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense
+from sklearn.ensemble import RandomForestRegressor
 
 # =========================================================
 # CONFIG
 # =========================================================
-st.set_page_config("STP DIGITAL TWIN V9", layout="wide")
+st.set_page_config("STP DIGITAL TWIN V9 FIXED", layout="wide")
 
 PLANTS = {
     "Plant A - Industrial": "plant_a.csv",
@@ -26,8 +24,8 @@ def init_file(file):
         df = pd.DataFrame(columns=["time","DO","NH3","SRT","SVI"])
         df.to_csv(file, index=False)
 
-for p in PLANTS.values():
-    init_file(p)
+for f in PLANTS.values():
+    init_file(f)
 
 # =========================================================
 # SAVE DATA
@@ -47,22 +45,19 @@ def save_data(file, do, nh3, srt, svi):
     df.to_csv(file, index=False)
 
 # =========================================================
-# DIGITAL TWIN SIMULATION (process behavior model)
+# DIGITAL TWIN SIMULATION
 # =========================================================
 def digital_twin(do, nh3, srt, svi):
 
-    nh3 = nh3 + np.random.normal(0, 0.5)
     do = do + np.random.normal(0, 0.2)
+    nh3 = nh3 + np.random.normal(0, 0.5)
 
     return do, nh3, srt, svi
 
 # =========================================================
-# LSTM MODEL (simple forecasting)
+# SIMPLE AI FORECAST (NO TENSORFLOW)
 # =========================================================
-
-from sklearn.ensemble import RandomForestRegressor
-
-def simple_forecast(df):
+def forecast_nh3(df):
 
     if len(df) < 10:
         return None
@@ -73,16 +68,55 @@ def simple_forecast(df):
     X = df[["t"]]
     y = df["NH3"]
 
-    model = RandomForestRegressor(n_estimators=50)
+    model = RandomForestRegressor(n_estimators=80, random_state=42)
     model.fit(X, y)
 
     future = [[len(df) + 5]]
     return model.predict(future)[0]
 
 # =========================================================
-# UI - MULTI PLANT
+# AI FAULT ENGINE
 # =========================================================
-st.title("🏭 Industrial Digital Twin V9")
+def diagnose(do, nh3, srt, svi):
+
+    faults = []
+
+    if nh3 > 10 and srt < 10:
+        faults.append("⚠️ Nitrification Limitation (Low SRT)")
+
+    if do > 5 and nh3 > 10:
+        faults.append("⚠️ Process Imbalance (High DO + High NH3)")
+
+    if svi > 150:
+        faults.append("⚠️ Bulking Risk")
+
+    if srt < 5:
+        faults.append("🚨 Biomass Washout Risk")
+
+    return faults
+
+# =========================================================
+# HEALTH ENGINE
+# =========================================================
+def health_score(do, nh3, srt, svi):
+
+    score = 100
+
+    if do < 1:
+        score -= 40
+    if nh3 > 10:
+        score -= 20
+    if svi > 150:
+        score -= 20
+    if srt < 5:
+        score -= 20
+
+    return max(score, 0)
+
+# =========================================================
+# UI
+# =========================================================
+st.title("🏭 Industrial Digital Twin V9 (FIXED VERSION)")
 
 plant_name = st.sidebar.selectbox("Select Plant", list(PLANTS.keys()))
 file = PLANTS[plant_name]
@@ -103,7 +137,7 @@ if st.sidebar.button("Run Digital Twin Step"):
 
     save_data(file, do, nh3, srt, svi)
 
-    st.success("Twin step executed")
+    st.success("Digital twin step executed")
 
 # =========================================================
 # LOAD DATA
@@ -111,18 +145,10 @@ if st.sidebar.button("Run Digital Twin Step"):
 df = pd.read_csv(file)
 
 # =========================================================
-# HEALTH ENGINE
+# ENGINEERING CALCS
 # =========================================================
-health = 100
-
-if do < 1:
-    health -= 40
-if nh3 > 10:
-    health -= 20
-if svi > 150:
-    health -= 20
-if srt < 5:
-    health -= 20
+health = health_score(do, nh3, srt, svi)
+faults = diagnose(do, nh3, srt, svi)
 
 # =========================================================
 # KPI DASHBOARD
@@ -134,55 +160,36 @@ c2.metric("NH3", round(nh3,2))
 c3.metric("SRT", round(srt,2))
 c4.metric("Health", health)
 
-st.progress(max(health,0))
+st.progress(health)
 
 # =========================================================
-# FAULT ENGINE
+# FAULT DISPLAY
 # =========================================================
-st.subheader("🚨 Fault Detection")
+st.subheader("🚨 Fault Detection Engine")
 
-faults = []
-
-if nh3 > 10 and srt < 10:
-    faults.append("Nitrification Limitation")
-
-if do > 5 and nh3 > 10:
-    faults.append("Process Imbalance (High DO but high NH3)")
-
-if svi > 150:
-    faults.append("Bulking Risk")
-
-for f in faults:
-    st.error(f)
-
-if not faults:
+if faults:
+    for f in faults:
+        st.error(f)
+else:
     st.success("Stable Operation")
 
 # =========================================================
-# LSTM PREDICTION
+# PREDICTION ENGINE
 # =========================================================
-st.subheader("🧠 LSTM NH3 Forecast")
+st.subheader("🧠 NH3 Forecast (AI)")
 
-if len(df) > 20:
+pred = forecast_nh3(df)
 
-    data = df[["DO","NH3","SRT","SVI"]].values
-
-    model, scaler = train_lstm(data)
-
-    last_seq = scaler.transform(data[-5:]).reshape(1,5,4)
-
-    pred = model.predict(last_seq)[0][0]
-
-    st.write("Predicted NH3:", float(pred))
+if pred:
+    st.write("Predicted NH3 (next cycle):", round(pred, 2))
 
     if pred > 15:
         st.error("⚠️ Future NH3 spike predicted")
-
 else:
-    st.info("Need more data for LSTM training")
+    st.info("Not enough data for prediction (need ≥10 records)")
 
 # =========================================================
-# DIGITAL TWIN TREND
+# TREND
 # =========================================================
 st.subheader("📈 Plant Trend")
 
@@ -190,7 +197,7 @@ if len(df) > 0:
     st.line_chart(df.set_index("time")[["DO","NH3"]])
 
 # =========================================================
-# MULTI PLANT OVERVIEW
+# MULTI-PLANT OVERVIEW
 # =========================================================
 st.subheader("🌍 Fleet Overview")
 
@@ -198,11 +205,18 @@ summary = []
 
 for name, f in PLANTS.items():
     d = pd.read_csv(f)
+
     if len(d) > 0:
         summary.append({
             "Plant": name,
+            "Last DO": d["DO"].iloc[-1],
             "Last NH3": d["NH3"].iloc[-1],
-            "Last DO": d["DO"].iloc[-1]
+            "Health": health_score(
+                d["DO"].iloc[-1],
+                d["NH3"].iloc[-1],
+                d["SRT"].iloc[-1],
+                d["SVI"].iloc[-1],
+            )
         })
 
 st.dataframe(pd.DataFrame(summary))
