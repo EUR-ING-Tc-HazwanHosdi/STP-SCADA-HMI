@@ -6,7 +6,7 @@ from datetime import datetime
 from sklearn.ensemble import RandomForestRegressor
 
 # =========================================================
-# CONFIG
+# CONFIGURATION 
 # =========================================================
 st.set_page_config("STP DIGITAL TWIN V9 FIXED", layout="wide")
 
