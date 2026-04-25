@@ -59,27 +59,25 @@ def digital_twin(do, nh3, srt, svi):
 # =========================================================
 # LSTM MODEL (simple forecasting)
 # =========================================================
-def train_lstm(data):
 
-    scaler = MinMaxScaler()
-    data_scaled = scaler.fit_transform(data)
+from sklearn.ensemble import RandomForestRegressor
 
-    X, y = [], []
+def simple_forecast(df):
 
-    for i in range(len(data_scaled)-5):
-        X.append(data_scaled[i:i+5])
-        y.append(data_scaled[i+5][1])  # NH3
+    if len(df) < 10:
+        return None
 
-    X, y = np.array(X), np.array(y)
+    df = df.copy()
+    df["t"] = range(len(df))
 
-    model = Sequential()
-    model.add(LSTM(32, input_shape=(5,4)))
-    model.add(Dense(1))
+    X = df[["t"]]
+    y = df["NH3"]
 
-    model.compile(optimizer="adam", loss="mse")
-    model.fit(X, y, epochs=5, verbose=0)
+    model = RandomForestRegressor(n_estimators=50)
+    model.fit(X, y)
 
-    return model, scaler
+    future = [[len(df) + 5]]
+    return model.predict(future)[0]
 
 # =========================================================
 # UI - MULTI PLANT
